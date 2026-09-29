@@ -133,7 +133,7 @@ class CDOSimulator:
                                index=[f"Q{i}" for i in range(1, 21)],
                                columns=[f"Bond {i}" for i in range(1, 11)])
         print("\n--- 10 Collateral Bonds Cash Flows ---")
-        print(bond_df.round(0).applymap(lambda x: f"{x:,.0f}"))
+        print(bond_df.round(0).map(lambda x: f"{x:,.0f}"))
 
         # 2. Display CDO Waterfall cash flows
         cdo_df = pd.DataFrame({
@@ -144,7 +144,7 @@ class CDOSimulator:
         }, index=[f"Q{i}" for i in range(1, 21)])
 
         print("\n--- CDO Tranche Waterfall ---")
-        print(cdo_df.round(0).applymap(lambda x: f"{x:,.0f}"))
+        print(cdo_df.round(0).map(lambda x: f"{x:,.0f}"))
 
 
 if __name__ == "__main__":
@@ -152,9 +152,19 @@ if __name__ == "__main__":
     cdo_model = CDOSimulator(seed=123)
     cdo_model.run_simulation()
 
-    # Print the statistical report (Task 3)
+    # Print the statistical report
     cdo_model.generate_statistics_report()
 
-    # Print a specific scenario so the user can see exact mechanics (Tasks 1 & 2)
-    # You can change the case number here (1 to 1000)
-    cdo_model.view_case(case_num=1)
+    # Interactive prompt for the user
+    while True:
+        user_input = input("\nEnter a case number to view (1-1000) or 'q' to quit: ")
+
+        if user_input.lower() == 'q':
+            break
+
+        try:
+            case_to_view = int(user_input)
+            cdo_model.view_case(case_num=case_to_view)
+        except ValueError as e:
+            # This catches both non-integer inputs and numbers outside the 1-1000 range
+            print(f"Invalid input. {e}")
