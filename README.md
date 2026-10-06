@@ -12,7 +12,7 @@ The structuring group has proposed two PACs for the CDO. The Class A tranche has
 
 ## **The Waterfall**
 
-The waterfall is as follows: Class A is paid first from available cash flows, and then Class B is paid. The residual goes to the bank. There are no carry-forwards, all cash flows are distributed as earned.
+Collateral interest cash flows are used first to pay Class A interest, then Class B interest, with any remaining interest distributed to the bank as the residual equity holder. Recovery and principal cash flows are applied sequentially to Class A principal, then Class B principal, with any remaining amount distributed to the bank. There are no carry-forwards, and all cash flows are distributed as earned. Tranche coupons are calculated on beginning-of-quarter outstanding principal balances. Because the project description does not specify a detailed principal amortization schedule, this principal allocation is treated as a modeling assumption.
 
 > *Suggestion: Compute promised cash flows of the collateral, adjust the cash flows for default times, and distribute the cash flows according to the waterfall.*
 
