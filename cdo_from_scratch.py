@@ -4,6 +4,10 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.stats import norm
 
+# Force the full table to print
+pd.set_option('display.max_columns', None)
+pd.set_option('display.width', 1000)
+
 # -----------------------------
 # Project Parameters
 # -----------------------------
