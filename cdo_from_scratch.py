@@ -76,7 +76,7 @@ np.fill_diagonal(corr_matrix, 1.0)
 # Do Cholesky decomposition
 cholesky_matrix = np.linalg.cholesky(corr_matrix)
 
-print("\nCholesky matrix:")
+# print("\nCholesky matrix:")
 # print(cholesky_matrix)
 
 # -----------------------------
@@ -90,13 +90,13 @@ independent_normals = np.random.normal(
     size=(N_SIM, N_BONDS)
 )
 
-print("\nIndependent normals shape:")
+# print("\nIndependent normals shape:")
 # print(independent_normals.shape)
 
 # Multiply the independent normals by the Cholesky matrix to get correlated matrix
 correlated_normals = independent_normals @ cholesky_matrix.T
 
-print("\nCorrelated normals shape:")
+# print("\nCorrelated normals shape:")
 # print(correlated_normals.shape)
 
 # Verify that our simulated correlation matches our 20% target
@@ -105,8 +105,8 @@ sample_corr = np.corrcoef(
     rowvar=False
 )
 
-print("\nSample correlation matrix:")
-print(np.round(sample_corr, 2))
+# print("\nSample correlation matrix:")
+# print(np.round(sample_corr, 2))
 
 # -----------------------------
 # Step 4: Convert Normal to Uniform
@@ -115,10 +115,10 @@ print(np.round(sample_corr, 2))
 # Convert correlated normals to uniform probabilities from 0 to 1
 uniforms = norm.cdf(correlated_normals)
 
-print("\nUniforms shape:")
-print(uniforms.shape)
+# print("\nUniforms shape:")
+# print(uniforms.shape)
 
-print("\nFirst simulation - uniform values:")
+# print("\nFirst simulation - uniform values:")
 # print(uniforms[0])
 
 # -----------------------------
@@ -132,11 +132,11 @@ default_times = (
     / np.log(1 - ANNUAL_DEFAULT_PROB)
 )
 
-print("\nDefault times shape:")
-print(default_times.shape)
+# print("\nDefault times shape:")
+# print(default_times.shape)
 
-print("\nFirst simulation - default times in years:")
-print(np.round(default_times[0], 2))
+# print("\nFirst simulation - default times in years:")
+# print(np.round(default_times[0], 2))
 
 # -----------------------------
 # Step 6: Convert Default Times to Default Quarters
@@ -147,7 +147,7 @@ default_quarters = np.ceil(
     default_times * QUARTERS_PER_YEAR
 ).astype(int)
 
-print("\nFirst simulation - default quarters:")
+# print("\nFirst simulation - default quarters:")
 # print(default_quarters[0])
 
 # -----------------------------
@@ -208,16 +208,16 @@ total_collateral_cf = (
     + collateral_principal_cf
 )
 
-print("\nCase 1 - Interest CF:")
+# print("\nCase 1 - Interest CF:")
 # print(collateral_interest_cf[0])
 
-print("\nCase 1 - Recovery CF:")
+# print("\nCase 1 - Recovery CF:")
 # print(collateral_recovery_cf[0])
 
-print("\nCase 1 - Principal CF:")
+# print("\nCase 1 - Principal CF:")
 # print(collateral_principal_cf[0])
 
-print("\nCase 1 - Total CF:")
+# print("\nCase 1 - Total CF:")
 # print(total_collateral_cf[0])
 
 # -----------------------------
@@ -336,19 +336,19 @@ class_B_total_cf = (
     + class_B_principal_cf
 )
 
-print("\nCase 1 - Class A Total CF:")
+# print("\nCase 1 - Class A Total CF:")
 # print(class_A_total_cf[0])
 
-print("\nCase 1 - Class B Total CF:")
+# print("\nCase 1 - Class B Total CF:")
 # print(class_B_total_cf[0])
 
-print("\nCase 1 - Equity CF:")
+# print("\nCase 1 - Equity CF:")
 # print(equity_cf[0])
 
-print("\nCase 1 - Class A Balance:")
+# print("\nCase 1 - Class A Balance:")
 # print(class_A_balance[0])
 
-print("\nCase 1 - Class B Balance:")
+# print("\nCase 1 - Class B Balance:")
 # print(class_B_balance[0])
 
 allocated_cf = (
@@ -357,12 +357,12 @@ allocated_cf = (
     + equity_cf
 )
 
-print(
-    np.allclose(
-        allocated_cf,
-        total_collateral_cf
-    )
-)
+# print(
+#     np.allclose(
+#         allocated_cf,
+#         total_collateral_cf
+#     )
+# )
 
 bond_cash_flows = (
     coupon_cash_flows
