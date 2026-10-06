@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -7,30 +8,41 @@ from scipy.stats import norm
 # Project Parameters
 # -----------------------------
 
+# Simulation Parameters
 N_SIM = 1000
 N_BONDS = 10
 
+# Timing Parameters
 YEARS = 5
 QUARTERS_PER_YEAR = 4
 N_QUARTERS = YEARS * QUARTERS_PER_YEAR
 
+# Bond collateral characteristics
 FACE_VALUE = 10_000_000
 COUPON_RATE = 0.06
 
+# Risk parameters
 ANNUAL_DEFAULT_PROB = 0.04
 LGD = 0.60
 RECOVERY_RATE = 1 - LGD
 
+# Correlation models how likely bonds are to default together
 DEFAULT_CORRELATION = 0.20
 
+# Class A (safest and lowest yield)
 CLASS_A_NOTIONAL = 20_000_000
 CLASS_A_COUPON = 0.02
 
+# Class B (riskier but higher yield)
 CLASS_B_NOTIONAL = 10_000_000
 CLASS_B_COUPON = 0.04
 
+# Class C (Equity Tranche gets whatever is left over)
+
+# For Reproducibility of random numbers
 SEED = 123
 
+# Pre-calculate quarterly coupon payments
 quarterly_bond_coupon = FACE_VALUE * COUPON_RATE / QUARTERS_PER_YEAR
 
 quarterly_A_coupon = (
@@ -49,16 +61,19 @@ quarterly_B_coupon = (
 # Step 2: Correlation Matrix
 # -----------------------------
 
+# Create a 10x10 matrix where every pair of bonds has a 0.20 correlation
 corr_matrix = np.full(
     (N_BONDS, N_BONDS),
     DEFAULT_CORRELATION
 )
 
+# A bond's correlation with itself is exactly 1.0
 np.fill_diagonal(corr_matrix, 1.0)
 
-print("\nCorrelation matrix:")
+# print("\nCorrelation matrix:")
 # print(corr_matrix)
 
+# Do Cholesky decomposition
 cholesky_matrix = np.linalg.cholesky(corr_matrix)
 
 print("\nCholesky matrix:")
@@ -70,6 +85,7 @@ print("\nCholesky matrix:")
 
 np.random.seed(SEED)
 
+# Generate 1,000 sets of 10 independent random numbers from a standard normal distribution
 independent_normals = np.random.normal(
     size=(N_SIM, N_BONDS)
 )
@@ -77,11 +93,13 @@ independent_normals = np.random.normal(
 print("\nIndependent normals shape:")
 # print(independent_normals.shape)
 
+# Multiply the independent normals by the Cholesky matrix to get correlated matrix
 correlated_normals = independent_normals @ cholesky_matrix.T
 
 print("\nCorrelated normals shape:")
 # print(correlated_normals.shape)
 
+# Verify that our simulated correlation matches our 20% target
 sample_corr = np.corrcoef(
     correlated_normals,
     rowvar=False
@@ -94,6 +112,7 @@ print(np.round(sample_corr, 2))
 # Step 4: Convert Normal to Uniform
 # -----------------------------
 
+# Convert correlated normals to uniform probabilities from 0 to 1
 uniforms = norm.cdf(correlated_normals)
 
 print("\nUniforms shape:")
@@ -106,6 +125,8 @@ print("\nFirst simulation - uniform values:")
 # Step 5: Convert Uniforms to Default Times
 # -----------------------------
 
+# Use the inverse of the exponential distribution CDF to translate the
+# uniform probabilities [0, 1] into an actual time-to-default in years.
 default_times = (
     np.log(1 - uniforms)
     / np.log(1 - ANNUAL_DEFAULT_PROB)
@@ -121,6 +142,7 @@ print(np.round(default_times[0], 2))
 # Step 6: Convert Default Times to Default Quarters
 # -----------------------------
 
+# Multiply years by 4 and round up to find the exact quarter a bond defaults.
 default_quarters = np.ceil(
     default_times * QUARTERS_PER_YEAR
 ).astype(int)
@@ -133,6 +155,7 @@ print("\nFirst simulation - default quarters:")
 # -----------------------------
 recovery_amount = FACE_VALUE * RECOVERY_RATE
 
+# 3D arrays to store cash flows: [Simulation Scenario, Bond Number, Quarter]
 coupon_cash_flows = np.zeros(
     (N_SIM, N_BONDS, N_QUARTERS)
 )
@@ -148,7 +171,7 @@ principal_cash_flows = np.zeros(
 for sim in range(N_SIM):
 
     for bond in range(N_BONDS):
-
+        # If the bond defaults
         default_q = default_quarters[sim, bond]
 
         for q in range(1, N_QUARTERS + 1):
@@ -171,12 +194,14 @@ for sim in range(N_SIM):
                 if q == N_QUARTERS:
                     principal_cash_flows[sim, bond, q - 1] = FACE_VALUE
 
+# Aggregate the cash flows from all 10 bonds for the whole pool
 collateral_interest_cf = coupon_cash_flows.sum(axis=1)
 
 collateral_recovery_cf = recovery_cash_flows.sum(axis=1)
 
 collateral_principal_cf = principal_cash_flows.sum(axis=1)
 
+# This is the total cash coming in to the CDO every quarter
 total_collateral_cf = (
     collateral_interest_cf
     + collateral_recovery_cf
@@ -199,6 +224,7 @@ print("\nCase 1 - Total CF:")
 # Step 8: CDO Waterfall
 # -----------------------------
 
+# Initialize arrays to track what gets paid out to the tranches
 class_A_interest_cf = np.zeros((N_SIM, N_QUARTERS))
 class_B_interest_cf = np.zeros((N_SIM, N_QUARTERS))
 
@@ -207,9 +233,11 @@ class_B_principal_cf = np.zeros((N_SIM, N_QUARTERS))
 
 equity_cf = np.zeros((N_SIM, N_QUARTERS))
 
+# Track the remaining principal balance owed to Class A and B
 class_A_balance = np.zeros((N_SIM, N_QUARTERS + 1))
 class_B_balance = np.zeros((N_SIM, N_QUARTERS + 1))
 
+# Set initial balances at Quarter 0
 class_A_balance[:, 0] = CLASS_A_NOTIONAL
 class_B_balance[:, 0] = CLASS_B_NOTIONAL
 
@@ -221,9 +249,9 @@ for sim in range(N_SIM):
         A_bal = class_A_balance[sim, q]
         B_bal = class_B_balance[sim, q]
 
-        # -------------------------
-        # 1. Interest Waterfall
-        # -------------------------
+        # ---------------------------------
+        # 1. Interest Waterfall for A and B
+        # ---------------------------------
 
         available_interest = collateral_interest_cf[sim, q]
 
@@ -244,9 +272,9 @@ for sim in range(N_SIM):
 
         remaining_interest -= B_interest_paid
 
-        # -------------------------
-        # 2. Principal Waterfall
-        # -------------------------
+        # ----------------------------------
+        # 2. Principal Waterfall for A and B
+        # ----------------------------------
 
         available_principal = (
             collateral_recovery_cf[sim, q]
@@ -297,6 +325,7 @@ for sim in range(N_SIM):
             B_bal - B_principal_paid
         )
 
+# Combine interest and principal for total tranche cash flows
 class_A_total_cf = (
     class_A_interest_cf
     + class_A_principal_cf
@@ -499,6 +528,7 @@ print(
 # -----------------------------
 # Step 10: Probability Distributions
 # -----------------------------
+os.makedirs("distributions", exist_ok=True)
 
 plt.figure()
 
@@ -510,7 +540,7 @@ plt.hist(
 plt.xlabel("Total 5-Year Cash Flow ($MM)")
 plt.ylabel("Frequency")
 plt.title("Distribution of Collateral Cash Flows")
-plt.savefig("collateral_distribution.png", dpi=300, bbox_inches="tight")
+plt.savefig("distributions/collateral_distribution.png", dpi=300, bbox_inches="tight")
 plt.show()
 
 plt.figure()
@@ -523,7 +553,7 @@ plt.hist(
 plt.xlabel("Total 5-Year Cash Flow ($MM)")
 plt.ylabel("Frequency")
 plt.title("Distribution of Class A Cash Flows")
-plt.savefig("class_A_distribution.png", dpi=300, bbox_inches="tight")
+plt.savefig("distributions/class_A_distribution.png", dpi=300, bbox_inches="tight")
 plt.show()
 
 plt.figure()
@@ -536,7 +566,7 @@ plt.hist(
 plt.xlabel("Total 5-Year Cash Flow ($MM)")
 plt.ylabel("Frequency")
 plt.title("Distribution of Class B Cash Flows")
-plt.savefig("class_B_distribution.png", dpi=300, bbox_inches="tight")
+plt.savefig("distributions/class_B_distribution.png", dpi=300, bbox_inches="tight")
 plt.show()
 
 plt.figure()
@@ -549,7 +579,7 @@ plt.hist(
 plt.xlabel("Total 5-Year Cash Flow ($MM)")
 plt.ylabel("Frequency")
 plt.title("Distribution of Equity Cash Flows")
-plt.savefig("equity_distribution.png", dpi=300, bbox_inches="tight")
+plt.savefig("distributions/equity_distribution.png", dpi=300, bbox_inches="tight")
 plt.show()
 
 # -----------------------------
@@ -798,8 +828,9 @@ print("=" * 100)
 
 print(sensitivity_df.round(2))
 
+os.makedirs("sensitivity", exist_ok=True)
 sensitivity_df.to_csv(
-    "sensitivity_analysis.csv",
+    "sensitivity/sensitivity_analysis.csv",
     index=False
 )
 
@@ -822,7 +853,7 @@ plt.xticks(rotation=45)
 plt.tight_layout()
 
 plt.savefig(
-    "sensitivity_collateral_5pct.png",
+    "sensitivity/sensitivity_collateral_5pct.png",
     dpi=300,
     bbox_inches="tight"
 )
@@ -844,7 +875,7 @@ plt.xticks(rotation=45)
 plt.tight_layout()
 
 plt.savefig(
-    "sensitivity_equity_5pct.png",
+    "sensitivity/sensitivity_equity_5pct.png",
     dpi=300,
     bbox_inches="tight"
 )
