@@ -1,4 +1,5 @@
 import os
+import sys
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -33,15 +34,20 @@ RECOVERY_RATE = 1 - LGD
 # Correlation models how likely bonds are to default together
 DEFAULT_CORRELATION = 0.20
 
-# Class A (safest and lowest yield)
-CLASS_A_NOTIONAL = 20_000_000
-CLASS_A_COUPON = 0.02
+# Part II Step 1 Parameters:
+# Class A ($15 MM principal, target rate 4.5%)
+CLASS_A_NOTIONAL = 15_000_000
+CLASS_A_COUPON = 0.045
 
-# Class B (riskier but higher yield)
-CLASS_B_NOTIONAL = 10_000_000
-CLASS_B_COUPON = 0.04
+# Class B ($30 MM principal, target rate 5.5%)
+CLASS_B_NOTIONAL = 30_000_000
+CLASS_B_COUPON = 0.055
 
-# Class C (Equity Tranche gets whatever is left over)
+# Class C (Equity / Residual Tranche gets whatever is left over)
+EQUITY_NOTIONAL = (N_BONDS * FACE_VALUE) - CLASS_A_NOTIONAL - CLASS_B_NOTIONAL
+
+# Risk-free interest rate (4% p.a.)
+RISK_FREE_RATE = 0.04
 
 # For Reproducibility of random numbers
 SEED = 123
@@ -84,21 +90,31 @@ cholesky_matrix = np.linalg.cholesky(corr_matrix)
 # print(cholesky_matrix)
 
 # -----------------------------
-# Step 3: Generate Random Normals
+# Step 3: Generate Random Normals (with Moment Matching for Part II Step 2)
 # -----------------------------
 
 np.random.seed(SEED)
 
 # Generate 1,000 sets of 10 independent random numbers from a standard normal distribution
-independent_normals = np.random.normal(
+independent_normals_raw = np.random.normal(
     size=(N_SIM, N_BONDS)
 )
+
+# Part II Step 2: Match first and second moments (mean = 0, std = 1) of static random numbers
+independent_normals = (
+    independent_normals_raw - independent_normals_raw.mean(axis=0)
+) / independent_normals_raw.std(axis=0, ddof=1)
 
 # print("\nIndependent normals shape:")
 # print(independent_normals.shape)
 
 # Multiply the independent normals by the Cholesky matrix to get correlated matrix
 correlated_normals = independent_normals @ cholesky_matrix.T
+
+# Re-standardize correlated normals so each bond column has exact sample mean 0 and std 1
+correlated_normals = (
+    correlated_normals - correlated_normals.mean(axis=0)
+) / correlated_normals.std(axis=0, ddof=1)
 
 # print("\nCorrelated normals shape:")
 # print(correlated_normals.shape)
@@ -453,7 +469,7 @@ stats = results_df.describe(
 ).T
 
 print("\n" + "=" * 100)
-print("TASK 3: TOTAL 5-YEAR CASH FLOW STATISTICS")
+print("TASK 3: TOTAL 5-YEAR CASH FLOW STATISTICS ($MM)")
 print("=" * 100)
 
 stats_display = stats.copy()
@@ -545,7 +561,7 @@ plt.xlabel("Total 5-Year Cash Flow ($MM)")
 plt.ylabel("Frequency")
 plt.title("Distribution of Collateral Cash Flows")
 plt.savefig("distributions/collateral_distribution.png", dpi=300, bbox_inches="tight")
-plt.show()
+plt.close()
 
 plt.figure()
 
@@ -558,7 +574,7 @@ plt.xlabel("Total 5-Year Cash Flow ($MM)")
 plt.ylabel("Frequency")
 plt.title("Distribution of Class A Cash Flows")
 plt.savefig("distributions/class_A_distribution.png", dpi=300, bbox_inches="tight")
-plt.show()
+plt.close()
 
 plt.figure()
 
@@ -571,7 +587,7 @@ plt.xlabel("Total 5-Year Cash Flow ($MM)")
 plt.ylabel("Frequency")
 plt.title("Distribution of Class B Cash Flows")
 plt.savefig("distributions/class_B_distribution.png", dpi=300, bbox_inches="tight")
-plt.show()
+plt.close()
 
 plt.figure()
 
@@ -584,7 +600,7 @@ plt.xlabel("Total 5-Year Cash Flow ($MM)")
 plt.ylabel("Frequency")
 plt.title("Distribution of Equity Cash Flows")
 plt.savefig("distributions/equity_distribution.png", dpi=300, bbox_inches="tight")
-plt.show()
+plt.close()
 
 # -----------------------------
 # Step 11: Sensitivity Analysis
@@ -603,24 +619,30 @@ def run_scenario(pd_annual, lgd, rho, seed=123):
 
     L = np.linalg.cholesky(corr_matrix)
 
-    # Independent normals -> correlated normals
-    independent_normals = np.random.normal(
+    # Independent normals -> moment-matched -> correlated normals
+    independent_normals_s = np.random.normal(
         size=(N_SIM, N_BONDS)
     )
+    independent_normals_s = (
+        independent_normals_s - independent_normals_s.mean(axis=0)
+    ) / independent_normals_s.std(axis=0, ddof=1)
 
-    correlated_normals = independent_normals @ L.T
+    correlated_normals_s = independent_normals_s @ L.T
+    correlated_normals_s = (
+        correlated_normals_s - correlated_normals_s.mean(axis=0)
+    ) / correlated_normals_s.std(axis=0, ddof=1)
 
     # Normal -> Uniform
-    uniforms = norm.cdf(correlated_normals)
+    uniforms_s = norm.cdf(correlated_normals_s)
 
     # Uniform -> default time
-    default_times = (
-        np.log(1 - uniforms)
+    default_times_s = (
+        np.log(1 - uniforms_s)
         / np.log(1 - pd_annual)
     )
 
-    default_quarters = np.ceil(
-        default_times * QUARTERS_PER_YEAR
+    default_quarters_s = np.ceil(
+        default_times_s * QUARTERS_PER_YEAR
     ).astype(int)
 
     # Bond cash-flow components
@@ -639,7 +661,7 @@ def run_scenario(pd_annual, lgd, rho, seed=123):
     for sim in range(N_SIM):
         for bond in range(N_BONDS):
 
-            dq = default_quarters[sim, bond]
+            dq = default_quarters_s[sim, bond]
 
             for q in range(1, N_QUARTERS + 1):
 
@@ -809,20 +831,20 @@ for name, (pd_val, lgd_val, rho_val) in scenarios.items():
     )
 
     sensitivity_rows.append({
-    "Scenario": name,
+        "Scenario": name,
 
-    "Collateral Mean": result["Collateral"].mean() / 1_000_000,
-    "Collateral Std": result["Collateral"].std() / 1_000_000,
-    "Collateral 5%": np.percentile(result["Collateral"], 5) / 1_000_000,
+        "Collateral Mean": result["Collateral"].mean() / 1_000_000,
+        "Collateral Std": result["Collateral"].std() / 1_000_000,
+        "Collateral 5%": np.percentile(result["Collateral"], 5) / 1_000_000,
 
-    "Class A Mean": result["Class A"].mean() / 1_000_000,
+        "Class A Mean": result["Class A"].mean() / 1_000_000,
 
-    "Class B Mean": result["Class B"].mean() / 1_000_000,
+        "Class B Mean": result["Class B"].mean() / 1_000_000,
 
-    "Equity Mean": result["Equity"].mean() / 1_000_000,
-    "Equity Std": result["Equity"].std() / 1_000_000,
-    "Equity 5%": np.percentile(result["Equity"], 5) / 1_000_000,
-})
+        "Equity Mean": result["Equity"].mean() / 1_000_000,
+        "Equity Std": result["Equity"].std() / 1_000_000,
+        "Equity 5%": np.percentile(result["Equity"], 5) / 1_000_000,
+    })
 
 sensitivity_df = pd.DataFrame(sensitivity_rows)
 
@@ -862,7 +884,7 @@ plt.savefig(
     bbox_inches="tight"
 )
 
-plt.show()
+plt.close()
 
 plt.figure(figsize=(10, 6))
 
@@ -884,20 +906,579 @@ plt.savefig(
     bbox_inches="tight"
 )
 
-plt.show()
+plt.close()
 
-while True:
 
-    user_input = input(
-        "\nEnter a case number (1-1000), or 'q' to quit: "
+# ==============================================================================
+# PART II: CDO VALUATION USING THE LINTNER MODEL
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Step 13 (Part II Steps 1-3): Scheduled Waterfall, Risk-Free PVs, Covariance
+# Matrix of Tranche Cash Flows, and Scenario Default Indicators
+# ------------------------------------------------------------------------------
+
+quarters_idx = np.arange(1, N_QUARTERS + 1)
+quarterly_rf = RISK_FREE_RATE / QUARTERS_PER_YEAR
+rf_discount_factors = 1.0 / ((1.0 + quarterly_rf) ** quarters_idx)
+
+# 1. Scheduled (Zero-Default) Cash Flows for Collateral and Tranches
+scheduled_collateral_cf = np.full(N_QUARTERS, N_BONDS * quarterly_bond_coupon)
+scheduled_collateral_cf[-1] += N_BONDS * FACE_VALUE
+
+scheduled_A_cf = np.full(N_QUARTERS, quarterly_A_coupon)
+scheduled_A_cf[-1] += CLASS_A_NOTIONAL
+
+scheduled_B_cf = np.full(N_QUARTERS, quarterly_B_coupon)
+scheduled_B_cf[-1] += CLASS_B_NOTIONAL
+
+scheduled_equity_cf = scheduled_collateral_cf - scheduled_A_cf - scheduled_B_cf
+
+scheduled_waterfall_df = pd.DataFrame(
+    {
+        "Scheduled Collateral ($MM)": scheduled_collateral_cf / 1_000_000,
+        "Scheduled Class A ($MM)": scheduled_A_cf / 1_000_000,
+        "Scheduled Class B ($MM)": scheduled_B_cf / 1_000_000,
+        "Scheduled Residual ($MM)": scheduled_equity_cf / 1_000_000,
+        "RF Discount Factor": rf_discount_factors,
+    },
+    index=[f"Q{i}" for i in range(1, N_QUARTERS + 1)],
+)
+
+print("\n" + "=" * 100)
+print("PART II - STEP 1: SCHEDULED WATERFALL CASH FLOWS ($MM)")
+print("=" * 100)
+print(scheduled_waterfall_df.round(4))
+
+# 2. Verify Moment Matching on the 1,000 Static Random Number Simulations
+print("\n" + "=" * 100)
+print("PART II - STEP 2: MOMENT-MATCHED STATIC NORMAL VERIFICATION (1,000 SIMS)")
+print("=" * 100)
+moment_check_df = pd.DataFrame(
+    {
+        "Raw Mean": independent_normals_raw.mean(axis=0),
+        "Raw Std": independent_normals_raw.std(axis=0, ddof=1),
+        "Moment-Matched Mean": independent_normals.mean(axis=0),
+        "Moment-Matched Std": independent_normals.std(axis=0, ddof=1),
+        "Correlated Normal Mean": correlated_normals.mean(axis=0),
+        "Correlated Normal Std": correlated_normals.std(axis=0, ddof=1),
+    },
+    index=[f"Bond {i}" for i in range(1, N_BONDS + 1)],
+)
+print(moment_check_df.round(6))
+
+# 3. Compute PV of each tranche in each scenario at the risk-free rate (4% p.a.)
+pv_collateral_rf = total_collateral_cf @ rf_discount_factors
+pv_A_rf = class_A_total_cf @ rf_discount_factors
+pv_B_rf = class_B_total_cf @ rf_discount_factors
+pv_equity_rf = equity_cf @ rf_discount_factors
+
+# Default indicators per scenario:
+# A tranche defaults in scenario s if it has any unpaid interest or unpaid ending principal
+# (equivalently, its realized PV discounted at its target rate is strictly below par).
+default_indicator_A = (
+    (A_interest_shortfall.sum(axis=1) > 1e-6)
+    | (class_A_balance[:, -1] > 1e-6)
+).astype(int)
+
+default_indicator_B = (
+    (B_interest_shortfall.sum(axis=1) > 1e-6)
+    | (class_B_balance[:, -1] > 1e-6)
+).astype(int)
+
+default_indicator_any = np.maximum(default_indicator_A, default_indicator_B)
+
+# 3x3 Covariance Matrix of the three tranches' risk-free PVs
+tranche_pv_matrix = np.vstack([pv_A_rf, pv_B_rf, pv_equity_rf])
+cov_matrix_tranches = np.cov(tranche_pv_matrix, ddof=1)
+corr_matrix_tranches = np.corrcoef(tranche_pv_matrix)
+
+cov_df = pd.DataFrame(
+    cov_matrix_tranches / 1e12,
+    index=["Class A", "Class B", "Residual (Equity)"],
+    columns=["Class A", "Class B", "Residual (Equity)"],
+)
+
+corr_df = pd.DataFrame(
+    corr_matrix_tranches,
+    index=["Class A", "Class B", "Residual (Equity)"],
+    columns=["Class A", "Class B", "Residual (Equity)"],
+)
+
+print("\n" + "=" * 100)
+print("PART II - STEP 3: RISK-FREE PVs, COVARIANCE MATRIX ($MM^2), & DEFAULT INDICATORS")
+print("=" * 100)
+
+pv_summary_df = pd.DataFrame(
+    {
+        "Notional ($MM)": [
+            CLASS_A_NOTIONAL / 1e6,
+            CLASS_B_NOTIONAL / 1e6,
+            EQUITY_NOTIONAL / 1e6,
+            (N_BONDS * FACE_VALUE) / 1e6,
+        ],
+        "Scheduled PV at RF ($MM)": [
+            (scheduled_A_cf @ rf_discount_factors) / 1e6,
+            (scheduled_B_cf @ rf_discount_factors) / 1e6,
+            (scheduled_equity_cf @ rf_discount_factors) / 1e6,
+            (scheduled_collateral_cf @ rf_discount_factors) / 1e6,
+        ],
+        "Mean Simulated PV at RF ($MM)": [
+            pv_A_rf.mean() / 1e6,
+            pv_B_rf.mean() / 1e6,
+            pv_equity_rf.mean() / 1e6,
+            pv_collateral_rf.mean() / 1e6,
+        ],
+        "Std Dev of PV ($MM)": [
+            pv_A_rf.std(ddof=1) / 1e6,
+            pv_B_rf.std(ddof=1) / 1e6,
+            pv_equity_rf.std(ddof=1) / 1e6,
+            pv_collateral_rf.std(ddof=1) / 1e6,
+        ],
+        "Default Indicator Freq (%)": [
+            default_indicator_A.mean() * 100,
+            default_indicator_B.mean() * 100,
+            np.nan,
+            default_indicator_any.mean() * 100,
+        ],
+    },
+    index=["Class A", "Class B", "Residual (Equity)", "Total Collateral Pool"],
+)
+print(pv_summary_df.round(4))
+
+print("\nCovariance Matrix of Tranche PVs at Risk-Free Rate ($MM^2):")
+print(cov_df.round(6))
+
+print("\nCorrelation Matrix of Tranche PVs at Risk-Free Rate:")
+print(corr_df.round(4))
+
+
+# ------------------------------------------------------------------------------
+# Step 14 (Part II Steps 4-5): Implicit Cost of Risk, Cost per Unit Risk, and
+# Lintner Tranche Valuation
+# ------------------------------------------------------------------------------
+# Note on Bond Valuation & Parameter Assumption (per Professor's PS):
+# - With the Part I collateral parameters (6.0% coupon, 4.0% annual default prob,
+#   60% LGD), the expected net return (~3.6%) is below the 4.0% risk-free rate,
+#   so the mean risk-free PV of the 10 bonds is $97.69 MM (< $100.00 MM par).
+# - Method A (Original 6% Bond Coupon): Value the 10 bonds by discounting their
+#   expected cash flows at the 6.0% risky market yield ($89.97 MM total, or
+#   $8.997 MM per bond). Then Implicit Cost of Risk = $97.69 MM - $89.97 MM = $7.72 MM.
+# - Method B (Adjusted 8% Bond Coupon at $100 MM Par): If the 10 bonds are priced
+#   at Par ($100.00 MM) in the market, raising the collateral bond coupon from 6.0%
+#   to 8.0% gives a mean risk-free PV of $105.82 MM (> $100.00 MM Par), yielding
+#   a positive Implicit Cost of Risk = $105.82 MM - $100.00 MM = $5.82 MM.
+
+quarterly_bond_yield = COUPON_RATE / QUARTERS_PER_YEAR
+bond_yield_discount_factors = 1.0 / ((1.0 + quarterly_bond_yield) ** quarters_idx)
+bond_market_valuation_6pct = (total_collateral_cf @ bond_yield_discount_factors).mean()
+
+implicit_cost_of_risk = pv_collateral_rf.mean() - bond_market_valuation_6pct
+
+# Pool variance and standard deviation from the 3x3 tranche covariance matrix
+pool_variance = cov_matrix_tranches.sum()
+pool_std_dev = np.sqrt(pool_variance)
+
+# Each tranche's covariance with the total pool (row sum of the 3x3 covariance matrix)
+cov_with_pool = cov_matrix_tranches.sum(axis=1)
+marginal_std_risk = cov_with_pool / pool_std_dev
+
+# Cost per unit of risk (both in variance units and standard deviation units)
+cost_per_unit_variance_risk = implicit_cost_of_risk / pool_variance
+cost_per_unit_std_risk = implicit_cost_of_risk / pool_std_dev
+
+# Lintner valuation of each tranche: V_i = E[PV_i(rf)] - lambda * Risk_i
+lintner_risk_discount = cost_per_unit_variance_risk * cov_with_pool
+lintner_values = np.array([pv_A_rf.mean(), pv_B_rf.mean(), pv_equity_rf.mean()]) - lintner_risk_discount
+
+print("\n" + "=" * 100)
+print("PART II - STEP 4: IMPLICIT COST OF RISK & COST PER UNIT RISK")
+print("=" * 100)
+print(f"Expected Collateral PV at 4.0% Risk-Free Rate : ${pv_collateral_rf.mean() / 1e6:,.4f} MM")
+print(f"Market Valuation of 10 Bonds (at 6.0% Yield)  : ${bond_market_valuation_6pct / 1e6:,.4f} MM")
+print(f"Implicit Cost of Risk (Total Risk Discount)   : ${implicit_cost_of_risk / 1e6:,.4f} MM")
+print(f"Total Pool Variance (Sum of 3x3 Cov Matrix)   : {pool_variance / 1e12:,.4f} ($MM^2)")
+print(f"Total Pool Standard Deviation (Sigma_Pool)    : ${pool_std_dev / 1e6:,.4f} MM")
+print(f"Cost per Unit of Std Dev Risk (Lambda_Std)    : {cost_per_unit_std_risk:,.6f} ($ per $ of Std Risk)")
+print(f"Cost per Unit of Variance Risk (Lambda_Var)   : {cost_per_unit_variance_risk * 1e6:,.6f} ($ per $MM^2 of Var)")
+
+lintner_table_df = pd.DataFrame(
+    {
+        "Notional ($MM)": [
+            CLASS_A_NOTIONAL / 1e6,
+            CLASS_B_NOTIONAL / 1e6,
+            EQUITY_NOTIONAL / 1e6,
+            (N_BONDS * FACE_VALUE) / 1e6,
+        ],
+        "Target Rate (%)": [
+            CLASS_A_COUPON * 100,
+            CLASS_B_COUPON * 100,
+            np.nan,
+            COUPON_RATE * 100,
+        ],
+        "E[PV] at 4% RF ($MM)": [
+            pv_A_rf.mean() / 1e6,
+            pv_B_rf.mean() / 1e6,
+            pv_equity_rf.mean() / 1e6,
+            pv_collateral_rf.mean() / 1e6,
+        ],
+        "Cov with Pool ($MM^2)": [
+            cov_with_pool[0] / 1e12,
+            cov_with_pool[1] / 1e12,
+            cov_with_pool[2] / 1e12,
+            pool_variance / 1e12,
+        ],
+        "Risk Contrib Sigma_i ($MM)": [
+            marginal_std_risk[0] / 1e6,
+            marginal_std_risk[1] / 1e6,
+            marginal_std_risk[2] / 1e6,
+            pool_std_dev / 1e6,
+        ],
+        "Risk Charge ($MM)": [
+            lintner_risk_discount[0] / 1e6,
+            lintner_risk_discount[1] / 1e6,
+            lintner_risk_discount[2] / 1e6,
+            implicit_cost_of_risk / 1e6,
+        ],
+        "Lintner Value ($MM)": [
+            lintner_values[0] / 1e6,
+            lintner_values[1] / 1e6,
+            lintner_values[2] / 1e6,
+            lintner_values.sum() / 1e6,
+        ],
+        "Value / Par (%)": [
+            (lintner_values[0] / CLASS_A_NOTIONAL) * 100,
+            (lintner_values[1] / CLASS_B_NOTIONAL) * 100,
+            (lintner_values[2] / EQUITY_NOTIONAL) * 100,
+            (lintner_values.sum() / (N_BONDS * FACE_VALUE)) * 100,
+        ],
+    },
+    index=["Class A", "Class B", "Residual (Equity)", "Total CDO"],
+)
+
+print("\n" + "=" * 100)
+print("PART II - STEP 5: LINTNER TRANCHE VALUATION TABLE (BASE 6.0% BOND COUPON)")
+print("=" * 100)
+print(lintner_table_df.round(4))
+
+
+# ------------------------------------------------------------------------------
+# Helper Function for Arbitrary Structure & Collateral Coupon (Used for Par
+# Calibration Check and Step 6 Structure Optimization)
+# ------------------------------------------------------------------------------
+
+def evaluate_cdo_structure(
+    class_a_notional=15_000_000,
+    class_a_coupon=0.045,
+    class_b_notional=30_000_000,
+    class_b_coupon=0.055,
+    bond_coupon_rate=COUPON_RATE,
+    bond_valuation_mode="yield",
+):
+    """
+    Run the waterfall and Lintner valuation for a given CDO tranche structure.
+    bond_valuation_mode:
+      - 'yield': values the 10 collateral bonds at their coupon discount rate (6%)
+      - 'par'  : values the 10 collateral bonds at Par ($100 MM)
+    """
+    scale = bond_coupon_rate / COUPON_RATE
+    coll_int = collateral_interest_cf * scale
+    tot_coll = coll_int + collateral_recovery_cf + collateral_principal_cf
+
+    A_int = np.zeros((N_SIM, N_QUARTERS))
+    B_int = np.zeros((N_SIM, N_QUARTERS))
+    A_prin = np.zeros((N_SIM, N_QUARTERS))
+    B_prin = np.zeros((N_SIM, N_QUARTERS))
+    eq_cf = np.zeros((N_SIM, N_QUARTERS))
+
+    A_bal_arr = np.zeros((N_SIM, N_QUARTERS + 1))
+    B_bal_arr = np.zeros((N_SIM, N_QUARTERS + 1))
+    A_bal_arr[:, 0] = class_a_notional
+    B_bal_arr[:, 0] = class_b_notional
+
+    for sim in range(N_SIM):
+        for q in range(N_QUARTERS):
+            ab = A_bal_arr[sim, q]
+            bb = B_bal_arr[sim, q]
+
+            avail_i = coll_int[sim, q]
+            ai_due = ab * class_a_coupon / QUARTERS_PER_YEAR
+            bi_due = bb * class_b_coupon / QUARTERS_PER_YEAR
+
+            ai_paid = min(avail_i, ai_due)
+            rem_i = avail_i - ai_paid
+            bi_paid = min(rem_i, bi_due)
+            rem_i -= bi_paid
+
+            avail_p = collateral_recovery_cf[sim, q] + collateral_principal_cf[sim, q]
+            ap_paid = min(avail_p, ab)
+            rem_p = avail_p - ap_paid
+            bp_paid = min(rem_p, bb)
+            rem_p -= bp_paid
+
+            eq_cf[sim, q] = rem_i + rem_p
+            A_int[sim, q] = ai_paid
+            B_int[sim, q] = bi_paid
+            A_prin[sim, q] = ap_paid
+            B_prin[sim, q] = bp_paid
+
+            A_bal_arr[sim, q + 1] = ab - ap_paid
+            B_bal_arr[sim, q + 1] = bb - bp_paid
+
+    A_cf_tot = A_int + A_prin
+    B_cf_tot = B_int + B_prin
+
+    A_due_mat = A_bal_arr[:, :-1] * class_a_coupon / QUARTERS_PER_YEAR
+    B_due_mat = B_bal_arr[:, :-1] * class_b_coupon / QUARTERS_PER_YEAR
+
+    def_A = ((A_due_mat - A_int).sum(axis=1) > 1e-6) | (A_bal_arr[:, -1] > 1e-6)
+    def_B = ((B_due_mat - B_int).sum(axis=1) > 1e-6) | (B_bal_arr[:, -1] > 1e-6)
+    def_any = def_A | def_B
+
+    pv_coll = tot_coll @ rf_discount_factors
+    pv_A = A_cf_tot @ rf_discount_factors
+    pv_B = B_cf_tot @ rf_discount_factors
+    pv_E = eq_cf @ rf_discount_factors
+
+    if bond_valuation_mode == "par":
+        v_pool = float(N_BONDS * FACE_VALUE)
+    else:
+        df_y = 1.0 / ((1.0 + bond_coupon_rate / QUARTERS_PER_YEAR) ** quarters_idx)
+        v_pool = float((tot_coll @ df_y).mean())
+
+    imp_cost = float(pv_coll.mean() - v_pool)
+    cov_mat = np.cov(np.vstack([pv_A, pv_B, pv_E]), ddof=1)
+    var_p = float(cov_mat.sum())
+    std_p = float(np.sqrt(var_p))
+    cov_p = cov_mat.sum(axis=1)
+    lam_var = imp_cost / var_p
+
+    val_A = float(pv_A.mean() - lam_var * cov_p[0])
+    val_B = float(pv_B.mean() - lam_var * cov_p[1])
+    val_E = float(pv_E.mean() - lam_var * cov_p[2])
+    eq_notional = (N_BONDS * FACE_VALUE) - class_a_notional - class_b_notional
+
+    return {
+        "A_Notional": class_a_notional,
+        "B_Notional": class_b_notional,
+        "E_Notional": eq_notional,
+        "E[PV_Pool]": float(pv_coll.mean()),
+        "V_Pool": v_pool,
+        "Implicit_Cost": imp_cost,
+        "Pool_Std": std_p,
+        "Lambda_Std": imp_cost / std_p,
+        "E[PV_A]": float(pv_A.mean()),
+        "E[PV_B]": float(pv_B.mean()),
+        "E[PV_E]": float(pv_E.mean()),
+        "Cov_A": float(cov_p[0]),
+        "Cov_B": float(cov_p[1]),
+        "Cov_E": float(cov_p[2]),
+        "Val_A": val_A,
+        "Val_B": val_B,
+        "Val_E": val_E,
+        "Def_Prob_A": float(def_A.mean()),
+        "Def_Prob_B": float(def_B.mean()),
+        "Def_Prob_Any": float(def_any.mean()),
+    }
+
+
+# Also display the Par-Calibrated Case (8.0% Bond Coupon, Bonds Valued at $100 MM Par)
+par_case = evaluate_cdo_structure(
+    class_a_notional=CLASS_A_NOTIONAL,
+    class_a_coupon=CLASS_A_COUPON,
+    class_b_notional=CLASS_B_NOTIONAL,
+    class_b_coupon=CLASS_B_COUPON,
+    bond_coupon_rate=0.08,
+    bond_valuation_mode="par",
+)
+
+print("\n" + "=" * 100)
+print("ALTERNATIVE PARAMETER CHECK (PER PS): 8.0% BOND COUPON WITH BONDS PRICED AT $100 MM PAR")
+print("=" * 100)
+print(
+    f"Expected Pool PV at 4% RF: ${par_case['E[PV_Pool]']/1e6:.4f} MM | "
+    f"Par Valuation: ${par_case['V_Pool']/1e6:.4f} MM | "
+    f"Implicit Cost of Risk: ${par_case['Implicit_Cost']/1e6:.4f} MM | "
+    f"Lambda_Std: {par_case['Lambda_Std']:.6f}"
+)
+par_table_df = pd.DataFrame(
+    {
+        "Notional ($MM)": [15.0, 30.0, 55.0, 100.0],
+        "E[PV] at 4% RF ($MM)": [
+            par_case["E[PV_A]"] / 1e6,
+            par_case["E[PV_B]"] / 1e6,
+            par_case["E[PV_E]"] / 1e6,
+            par_case["E[PV_Pool]"] / 1e6,
+        ],
+        "Risk Charge ($MM)": [
+            (par_case["E[PV_A]"] - par_case["Val_A"]) / 1e6,
+            (par_case["E[PV_B]"] - par_case["Val_B"]) / 1e6,
+            (par_case["E[PV_E]"] - par_case["Val_E"]) / 1e6,
+            par_case["Implicit_Cost"] / 1e6,
+        ],
+        "Lintner Value ($MM)": [
+            par_case["Val_A"] / 1e6,
+            par_case["Val_B"] / 1e6,
+            par_case["Val_E"] / 1e6,
+            (par_case["Val_A"] + par_case["Val_B"] + par_case["Val_E"]) / 1e6,
+        ],
+        "Value / Par (%)": [
+            (par_case["Val_A"] / 15e6) * 100,
+            (par_case["Val_B"] / 30e6) * 100,
+            (par_case["Val_E"] / 55e6) * 100,
+            100.0,
+        ],
+    },
+    index=["Class A", "Class B", "Residual (Equity)", "Total CDO"],
+)
+print(par_table_df.round(4))
+
+
+# ------------------------------------------------------------------------------
+# Step 15 (Part II Step 6 - BONUS): Optimize the Structure Holding Tranche A
+# Principal at $15 MM
+# ------------------------------------------------------------------------------
+
+opt_rows = []
+for b_mm in range(0, 85, 2):
+    b_not = b_mm * 1_000_000
+    res_base = evaluate_cdo_structure(
+        class_a_notional=15_000_000,
+        class_a_coupon=CLASS_A_COUPON,
+        class_b_notional=b_not,
+        class_b_coupon=CLASS_B_COUPON,
+        bond_coupon_rate=COUPON_RATE,
+        bond_valuation_mode="yield",
+    )
+    res_par = evaluate_cdo_structure(
+        class_a_notional=15_000_000,
+        class_a_coupon=CLASS_A_COUPON,
+        class_b_notional=b_not,
+        class_b_coupon=CLASS_B_COUPON,
+        bond_coupon_rate=0.08,
+        bond_valuation_mode="par",
+    )
+    opt_rows.append(
+        {
+            "Class B Notional ($MM)": b_mm,
+            "Residual Notional ($MM)": res_base["E_Notional"] / 1e6,
+            "CDO Default Freq (%)": res_base["Def_Prob_Any"] * 100,
+            "Val_A ($MM)": res_base["Val_A"] / 1e6,
+            "Val_B ($MM)": res_base["Val_B"] / 1e6,
+            "Class B Premium Val_B - B ($MM)": (res_base["Val_B"] - b_not) / 1e6,
+            "Residual Lintner Val_E ($MM)": res_base["Val_E"] / 1e6,
+            "Residual Value / Notional (%)": (res_base["Val_E"] / res_base["E_Notional"]) * 100,
+            "Expected Residual Val in Non-Default ($MM)": (
+                res_base["Val_E"] * (1.0 - res_base["Def_Prob_Any"]) / 1e6
+            ),
+            "ParCase Val_E ($MM)": res_par["Val_E"] / 1e6,
+            "ParCase Val_E / Notional (%)": (res_par["Val_E"] / res_par["E_Notional"]) * 100,
+            "ParCase Class B Premium ($MM)": (res_par["Val_B"] - b_not) / 1e6,
+        }
     )
 
-    if user_input.lower() == "q":
-        break
+opt_df = pd.DataFrame(opt_rows)
+opt_df.to_csv("sensitivity/lintner_optimization_results.csv", index=False)
 
-    try:
-        case_num = int(user_input)
-        view_case(case_num)
+print("\n" + "=" * 100)
+print("PART II - STEP 6 (BONUS): STRUCTURE OPTIMIZATION HOLDING CLASS A PRINCIPAL AT $15 MM")
+print("=" * 100)
+print(
+    opt_df[opt_df["Class B Notional ($MM)"].isin([0, 10, 20, 28, 30, 35, 40, 48, 50, 60, 66, 70, 80])]
+    .round(4)
+    .to_string(index=False)
+)
 
-    except ValueError:
-        print("Please enter a valid case number from 1 to 1000.")
+# Identify key optimal structures across standard structured-finance criteria
+zero_def_df = opt_df[opt_df["CDO Default Freq (%)"] == 0.0]
+max_zero_def_row = zero_def_df.iloc[-1]
+max_b_premium_row = opt_df.loc[opt_df["Class B Premium Val_B - B ($MM)"].idxmax()]
+par_feasible_df = opt_df[opt_df["Class B Premium Val_B - B ($MM)"] >= 0.0]
+max_par_leverage_row = par_feasible_df.iloc[-1]
+max_raw_residual_row = opt_df.loc[opt_df["Residual Lintner Val_E ($MM)"].idxmax()]
+
+print("\nSummary of Optimal Tranche B Sizing (Holding Class A = $15.00 MM):")
+print("------------------------------------------------------------------")
+print(
+    f"1. Max Debt Structure with Zero Defaults (Default Indicator = 0%): "
+    f"Class B = ${max_zero_def_row['Class B Notional ($MM)']:.0f} MM, "
+    f"Residual Notional = ${max_zero_def_row['Residual Notional ($MM)']:.0f} MM, "
+    f"Residual Value = ${max_zero_def_row['Residual Lintner Val_E ($MM)']:.4f} MM "
+    f"(Value/Notional = {max_zero_def_row['Residual Value / Notional (%)']:.2f}%)"
+)
+print(
+    f"2. Max Tranche B Value Creation (Max [Val_B - B_Notional] before default erosion): "
+    f"Class B = ${max_b_premium_row['Class B Notional ($MM)']:.0f} MM, "
+    f"Class B Premium = +${max_b_premium_row['Class B Premium Val_B - B ($MM)']:.4f} MM, "
+    f"Default Rate = {max_b_premium_row['CDO Default Freq (%)']:.2f}%, "
+    f"Residual Value = ${max_b_premium_row['Residual Lintner Val_E ($MM)']:.4f} MM"
+)
+print(
+    f"3. Max Par-Feasible Leverage (Largest Class B where Val_B >= Par): "
+    f"Class B = ${max_par_leverage_row['Class B Notional ($MM)']:.0f} MM, "
+    f"Residual Notional = ${max_par_leverage_row['Residual Notional ($MM)']:.0f} MM, "
+    f"Default Rate = {max_par_leverage_row['CDO Default Freq (%)']:.2f}%, "
+    f"Residual Value = ${max_par_leverage_row['Residual Lintner Val_E ($MM)']:.4f} MM"
+)
+print(
+    f"4. Max Unconstrained Dollar Residual Value (Val_E): "
+    f"Class B = ${max_raw_residual_row['Class B Notional ($MM)']:.0f} MM, "
+    f"Residual Notional = ${max_raw_residual_row['Residual Notional ($MM)']:.0f} MM, "
+    f"Residual Value = ${max_raw_residual_row['Residual Lintner Val_E ($MM)']:.4f} MM "
+    f"(Value/Notional = {max_raw_residual_row['Residual Value / Notional (%)']:.2f}%)"
+)
+
+# Plot Optimization Curves
+fig, ax1 = plt.subplots(figsize=(10, 6))
+ax1.plot(
+    opt_df["Class B Notional ($MM)"],
+    opt_df["Residual Lintner Val_E ($MM)"],
+    label="Residual Lintner Value ($MM)",
+    linewidth=2,
+)
+ax1.plot(
+    opt_df["Class B Notional ($MM)"],
+    opt_df["Class B Premium Val_B - B ($MM)"] * 10,
+    label="10x Class B Market Premium [Val_B - B] ($MM)",
+    linestyle="--",
+    linewidth=2,
+)
+ax1.set_xlabel("Class B Principal ($MM) [Holding Class A = $15 MM]")
+ax1.set_ylabel("Value ($MM)")
+ax1.grid(True, alpha=0.3)
+
+ax2 = ax1.twinx()
+ax2.plot(
+    opt_df["Class B Notional ($MM)"],
+    opt_df["CDO Default Freq (%)"],
+    color="crimson",
+    linestyle=":",
+    linewidth=2,
+    label="CDO Default Indicator Freq (%)",
+)
+ax2.set_ylabel("CDO Default Probability (%)", color="crimson")
+
+lines_1, labels_1 = ax1.get_legend_handles_labels()
+lines_2, labels_2 = ax2.get_legend_handles_labels()
+ax1.legend(lines_1 + lines_2, labels_1 + labels_2, loc="upper left")
+plt.title("CDO Structure Optimization (Holding Class A = $15 MM)")
+plt.tight_layout()
+plt.savefig("distributions/lintner_optimization.png", dpi=300, bbox_inches="tight")
+plt.close()
+
+if sys.stdin.isatty():
+    while True:
+
+        user_input = input(
+            "\nEnter a case number (1-1000), or 'q' to quit: "
+        )
+
+        if user_input.lower() == "q":
+            break
+
+        try:
+            case_num = int(user_input)
+            view_case(case_num)
+
+        except ValueError:
+            print("Please enter a valid case number from 1 to 1000.")
